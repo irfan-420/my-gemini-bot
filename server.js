@@ -3,12 +3,7 @@ const app = express();
 
 app.use(express.json());
 
-// হোম রুট
-app.get("/", (req, res) => {
-  res.send("বট সার্ভার সচল আছে!");
-});
-
-// ফেসবুক মেসেঞ্জার ভেরিফিকেশন
+// ফেসবুক মেসেঞ্জার ভেরিফিকেশন (GET Request)
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
@@ -21,7 +16,7 @@ app.get("/webhook", (req, res) => {
   }
 });
 
-// মেসেজ রিসিভ এবং রিপ্লাই
+// মূল মেসেজ প্রসেসিং (POST Request)
 app.post("/webhook", async (req, res) => {
   const body = req.body;
   if (body.object === "page") {
@@ -33,6 +28,7 @@ app.post("/webhook", async (req, res) => {
           const user_message = webhook_event.message.text;
           
           console.log(`User Said: ${user_message}`);
+          
           const ai_reply = await getGeminiResponse(user_message);
           await sendFacebookMessage(sender_psid, ai_reply);
         }
@@ -44,12 +40,15 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// জেমিনি এপিআই ফাংশন
+// জেমিনি এআই ফাংশন
 async function getGeminiResponse(prompt) {
+  const modelId = "gemini-1.5-flash"; 
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${process.env.GEMINI_API_KEY}`;
+  
+  // ডিবাগিংয়ের জন্য লিঙ্কটি লগে প্রিন্ট করবে
+  console.log("Requesting URL:", url);
+
   try {
-    const modelId = "gemini-1.5-flash"; 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${process.env.GEMINI_API_KEY}`;
-    
     const response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -64,15 +63,15 @@ async function getGeminiResponse(prompt) {
       return data.candidates[0].content.parts[0].text;
     } else {
       console.log("Full Gemini Response:", JSON.stringify(data));
-      return "দুঃখিত, জেমিনি এখন রেসপন্স দিচ্ছে না।";
+      return "জেমিনি থেকে কোনো উত্তর আসেনি। লগে দেখুন এপিআই কি ঠিক আছে কি না।";
     }
   } catch (error) {
-    console.error("Error:", error);
-    return "সার্ভার এরর!";
+    console.error("Fetch Error:", error);
+    return "সার্ভার কানেকশন এরর!";
   }
 }
 
-// ফেসবুক মেসেজ ফাংশন
+// ফেসবুক মেসেজ পাঠানোর ফাংশন
 async function sendFacebookMessage(sender_psid, text_reply) {
   const url = `https://graph.facebook.com/v21.0/me/messages?access_token=${process.env.PAGE_ACCESS_TOKEN}`;
   await fetch(url, {
