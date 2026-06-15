@@ -44,12 +44,12 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// জেমিনি এপিআই ফাংশন
+// জেমিনি এপিআই ফাংশন (সংশোধিত v1 ভার্সন)
 async function getGeminiResponse(prompt) {
   try {
-    // আপনার লিস্ট থেকে পাওয়া সঠিক মডেল নাম
-    const modelId = "gemini-1.5-flash-002"; 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${process.env.GEMINI_API_KEY}`;
+    // সঠিক মডেল এবং v1 ভার্সন
+    const modelId = "gemini-1.5-flash"; 
+    const url = `https://generativelanguage.googleapis.com/v1/models/${modelId}:generateContent?key=${process.env.GEMINI_API_KEY}`;
     
     const response = await fetch(url, {
       method: "POST",
@@ -64,11 +64,11 @@ async function getGeminiResponse(prompt) {
     if (data.candidates && data.candidates[0]?.content?.parts?.[0]?.text) {
       return data.candidates[0].content.parts[0].text;
     } else {
-      console.log("Gemini Error:", JSON.stringify(data));
-      return "জেমিনি থেকে কোনো উত্তর পাওয়া যায়নি।";
+      console.log("Gemini Full Response Error:", JSON.stringify(data));
+      return "জেমিনি থেকে কোনো উত্তর আসেনি। লগে এরর চেক করুন।";
     }
   } catch (error) {
-    console.error("Error:", error);
+    console.error("Fetch Error:", error);
     return "সার্ভার এরর!";
   }
 }
