@@ -3,11 +3,6 @@ const app = express();
 
 app.use(express.json());
 
-// হোম রুট
-app.get("/", (req, res) => {
-  res.send("বট সার্ভার সচল আছে!");
-});
-
 // ফেসবুক মেসেঞ্জার ভেরিফিকেশন
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
@@ -21,36 +16,13 @@ app.get("/webhook", (req, res) => {
   }
 });
 
-// মেসেজ রিসিভ এবং রিপ্লাই
-app.post("/webhook", async (req, res) => {
-  const body = req.body;
-  if (body.object === "page") {
-    for (const entry of body.entry) {
-      if (entry.messaging) {
-        const webhook_event = entry.messaging[0];
-        if (webhook_event?.message?.text) {
-          const sender_psid = webhook_event.sender.id;
-          const user_message = webhook_event.message.text;
-          
-          console.log(`User Said: ${user_message}`);
-          const ai_reply = await getGeminiResponse(user_message);
-          await sendFacebookMessage(sender_psid, ai_reply);
-        }
-      }
-    }
-    res.status(200).send("EVENT_RECEIVED");
-  } else {
-    res.sendStatus(404);
-  }
-});
-
-// জেমিনি এপিআই ফাংশন (সংশোধিত v1 ভার্সন)
+// জেমিনি এপিআই ফাংশন
 async function getGeminiResponse(prompt) {
+  // মডেলের নাম হিসেবে 'gemini-1.5-flash' ব্যবহার করা হচ্ছে
+  const modelId = "gemini-1.5-flash"; 
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${process.env.GEMINI_API_KEY}`;
+  
   try {
-    // সঠিক মডেল এবং v1 ভার্সন
-    const modelId = "gemini-1.5-flash"; 
-    const url = `https://generativelanguage.googleapis.com/v1/models/${modelId}:generateContent?key=${process.env.GEMINI_API_KEY}`;
-    
     const response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -61,11 +33,11 @@ async function getGeminiResponse(prompt) {
     
     const data = await response.json();
     
-    if (data.candidates && data.candidates[0]?.content?.parts?.[0]?.text) {
+    if (data.candidates && data.candidates[0].content.parts[0].text) {
       return data.candidates[0].content.parts[0].text;
     } else {
-      console.log("Gemini Full Response Error:", JSON.stringify(data));
-      return "জেমিনি থেকে কোনো উত্তর আসেনি। লগে এরর চেক করুন।";
+      console.error("Gemini API Error details:", JSON.stringify(data));
+      return "দুঃখিত, জেমিনি এই মুহূর্তে রেসপন্স দিচ্ছে না।";
     }
   } catch (error) {
     console.error("Fetch Error:", error);
@@ -73,18 +45,37 @@ async function getGeminiResponse(prompt) {
   }
 }
 
-// ফেসবুক মেসেজ ফাংশন
-async function sendFacebookMessage(sender_psid, text_reply) {
-  const url = `https://graph.facebook.com/v21.0/me/messages?access_token=${process.env.PAGE_ACCESS_TOKEN}`;
-  await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      recipient: { id: sender_psid },
-      message: { text: text_reply }
-    })
-  });
-}
+// ফেসবুক মেসেজ রিসিভ এবং রিপ্লাই
+app.post("/webhook", async (req, res) => {
+  const body = req.body;
+  if (body.object === "page") {
+    for (const entry of body.entry) {
+      if (entry.messaging) {
+        const webhook_event = entry.messaging[0];
+        if (webhook_event?.message?.text) {
+          const sender_psid = webhook_event.sender.id;
+          const user_message = webhook_event.message.text;
+          
+          const ai_reply = await getGeminiResponse(user_message);
+          
+          // ফেসবুক মেসেজ পাঠানোর ফাংশন
+          const fbUrl = `https://graph.facebook.com/v21.0/me/messages?access_token=${process.env.PAGE_ACCESS_TOKEN}`;
+          await fetch(fbUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              recipient: { id: sender_psid },
+              message: { text: ai_reply }
+            })
+          });
+        }
+      }
+    }
+    res.status(200).send("EVENT_RECEIVED");
+  } else {
+    res.sendStatus(404);
+  }
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Bot running on port ${PORT}`));
