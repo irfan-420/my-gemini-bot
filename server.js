@@ -5,7 +5,7 @@ app.use(express.json());
 
 // হোম রুট
 app.get("/", (req, res) => {
-  res.send("বট সার্ভার সচল আছে এবং Gemini 3.5 Flash ব্যবহার করছে!");
+  res.send("বট সার্ভার সচল আছে এবং Gemini 2.5 Flash ব্যবহার করছে!");
 });
 
 // ফেসবুক মেসেঞ্জার ভেরিফিকেশন
@@ -44,11 +44,11 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// জেমিনি এপিআই ফাংশন (Gemini 3.5 Flash ব্যবহার করে)
+// জেমিনি এপিআই ফাংশন (Gemini 2.5 Flash ব্যবহার করে)
 async function getGeminiResponse(prompt) {
   try {
-    // মডেল নাম হিসেবে 'gemini-3.5-flash' ব্যবহার করা হচ্ছে
-    const modelId = "gemini-3.5-flash"; 
+    // মডেল আইডি: gemini-2.5-flash
+    const modelId = "gemini-2.5-flash"; 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${process.env.GEMINI_API_KEY}`;
     
     const response = await fetch(url, {
@@ -58,6 +58,11 @@ async function getGeminiResponse(prompt) {
         contents: [{ parts: [{ text: prompt }] }]
       })
     });
+
+    // 503 এরর হ্যান্ডলিং
+    if (response.status === 503) {
+      return "সার্ভারে এই মুহূর্তে খুব চাপ রয়েছে। দয়া করে কিছুক্ষণ পর আবার মেসেজ দিন।";
+    }
     
     const data = await response.json();
     
@@ -65,7 +70,7 @@ async function getGeminiResponse(prompt) {
       return data.candidates[0].content.parts[0].text;
     } else {
       console.error("Gemini API Error:", JSON.stringify(data));
-      return "দুঃখিত, এই মডেলটি বর্তমানে রেসপন্স দিচ্ছে না।";
+      return "দুঃখিত, এই মডেলটি এখন রেসপন্স দিতে পারছে না।";
     }
   } catch (error) {
     console.error("Fetch Error:", error);
