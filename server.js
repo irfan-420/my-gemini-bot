@@ -33,16 +33,22 @@ const ai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const model = ai.getGenerativeModel({ model: 'gemini-pro' });
 
 // ------------------------------------------------------------------
-// ৩. ফায়ারবেস হোয়াটসঅ্যাপ সেশন হ্যান্ডলার (Firebase Auth State)
+// ৩. ফায়ারবেস হোয়াটসঅ্যাপ সেশন হ্যান্ডলার (প্যাচড ও ফিক্সড)
 // ------------------------------------------------------------------
 async function useFirebaseAuthState() {
     const collectionRef = db.collection('whatsapp_session');
     
     let creds;
-    const credsDoc = await collectionRef.doc('creds').get();
-    if (credsDoc.exists) {
-        creds = JSON.parse(credsDoc.data().data, BufferJSON.reviver);
-    } else {
+    try {
+        const credsDoc = await collectionRef.doc('creds').get();
+        if (credsDoc.exists && credsDoc.data().data) {
+            creds = JSON.parse(credsDoc.data().data, BufferJSON.reviver);
+        } else {
+            console.log("ℹ️ No previous session found in Firebase. Creating new credentials...");
+            creds = initAuthCreds();
+        }
+    } catch (err) {
+        console.log("⚠️ Database empty, initializing fresh credentials...");
         creds = initAuthCreds();
     }
 
@@ -53,9 +59,13 @@ async function useFirebaseAuthState() {
                 get: async (type, ids) => {
                     const data = {};
                     for (const id of ids) {
-                        const doc = await collectionRef.doc(`${type}-${id}`).get();
-                        if (doc.exists) {
-                            data[id] = JSON.parse(doc.data().data, BufferJSON.reviver);
+                        try {
+                            const doc = await collectionRef.doc(`${type}-${id}`).get();
+                            if (doc.exists && doc.data().data) {
+                                data[id] = JSON.parse(doc.data().data, BufferJSON.reviver);
+                            }
+                        } catch (e) {
+                            // কোনো ডাটা না থাকলে ইগনোর করবে
                         }
                     }
                     return data;
@@ -65,10 +75,14 @@ async function useFirebaseAuthState() {
                         for (const id in data[type]) {
                             const value = data[type][id];
                             const docRef = collectionRef.doc(`${type}-${id}`);
-                            if (value) {
-                                await docRef.set({ data: JSON.stringify(value, BufferJSON.replacer) });
-                            } else {
-                                await docRef.delete();
+                            try {
+                                if (value) {
+                                    await docRef.set({ data: JSON.stringify(value, BufferJSON.replacer) });
+                                } else {
+                                    await docRef.delete();
+                                }
+                            } catch (e) {
+                                console.error("❌ Error writing auth keys to Firebase:", e.message);
                             }
                         }
                     }
@@ -76,7 +90,11 @@ async function useFirebaseAuthState() {
             }
         },
         saveCreds: async () => {
-            await collectionRef.doc('creds').set({ data: JSON.stringify(creds, BufferJSON.replacer) });
+            try {
+                await collectionRef.doc('creds').set({ data: JSON.stringify(creds, BufferJSON.replacer) });
+            } catch (e) {
+                console.error("❌ Error saving main creds to Firebase:", e.message);
+            }
         }
     };
 }
@@ -108,12 +126,15 @@ async function connectToWhatsApp() {
         
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log('❌ WhatsApp connection closed. Reconnecting:', shouldReconnect);
+            console.log('❌ WhatsApp connection closed. Reason:', lastDisconnect.error?.message || 'Unknown');
             if (shouldReconnect) {
-                setTimeout(connectToWhatsApp, 5000); // কন্টিনিউয়াস লুপ এড়াতে ৫ সেকেন্ড ডিলে দেওয়া হয়েছে
+                console.log('🔄 Reconnecting to WhatsApp in 5 seconds...');
+                setTimeout(connectToWhatsApp, 5000);
             }
         } else if (connection === 'open') {
-            console.log('✅ WhatsApp User-Bot successfully connected and saved to Firebase!');
+            console.log('============== ✨ SUCCESS ✨ ==============');
+            console.log('✅ WhatsApp User-Bot successfully connected!');
+            console.log('===========================================');
         }
     });
 
