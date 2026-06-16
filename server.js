@@ -2,7 +2,7 @@ const express = require('express');
 const axios = require('axios');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const admin = require('firebase-admin');
-const { default: makeWASocket, BufferJSON, initAuthCreds, DisconnectReason } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, BufferJSON, initAuthCreds, DisconnectReason, Browsers } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
 const pino = require('pino');
 require('dotenv').config();
@@ -33,7 +33,7 @@ const ai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const model = ai.getGenerativeModel({ model: 'gemini-pro' });
 
 // ------------------------------------------------------------------
-// ৩. ফায়ারবেস হোয়াটসঅ্যাপ সেশন হ্যান্ডলার (প্যাচড ও ফিক্সড)
+// ৩. ফায়ারবেস হোয়াটসঅ্যাপ সেশন হ্যান্ডলার
 // ------------------------------------------------------------------
 async function useFirebaseAuthState() {
     const collectionRef = db.collection('whatsapp_session');
@@ -65,7 +65,7 @@ async function useFirebaseAuthState() {
                                 data[id] = JSON.parse(doc.data().data, BufferJSON.reviver);
                             }
                         } catch (e) {
-                            // কোনো ডাটা না থাকলে ইগনোর করবে
+                            // ইগনোর করবে
                         }
                     }
                     return data;
@@ -100,7 +100,7 @@ async function useFirebaseAuthState() {
 }
 
 // ------------------------------------------------------------------
-// ৪. হোয়াটসঅ্যাপ ব্রিজ (WhatsApp Bridge) ইনিশিয়েলাইজেশন
+// ৪. হোয়াটসঅ্যাপ ব্রিজ (WhatsApp Bridge - নেটওয়ার্ক বাইপাস সহ)
 // ------------------------------------------------------------------
 global.whatsappSock = null;
 
@@ -111,7 +111,11 @@ async function connectToWhatsApp() {
     const sock = makeWASocket({
         logger: pino({ level: 'silent' }),
         auth: state,
-        printQRInTerminal: false
+        printQRInTerminal: false,
+        // 🌟 সার্ভার নেটওয়ার্ক বাইপাস করার জন্য ক্রোম ব্রাউজার ডিক্লেয়ারেশন
+        browser: Browsers.macOS('Chrome'),
+        connectTimeoutMs: 60000, // সার্ভার স্লো হলেও যেন টাইমআউট না হয় (১ মিনিট টাইম)
+        keepAliveIntervalMs: 30000
     });
 
     sock.ev.on('connection.update', (update) => {
@@ -125,10 +129,13 @@ async function connectToWhatsApp() {
         }
         
         if (connection === 'close') {
-            const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log('❌ WhatsApp connection closed. Reason:', lastDisconnect.error?.message || 'Unknown');
+            const statusCode = lastDisconnect.error?.output?.statusCode;
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+            
+            console.log(`❌ WhatsApp connection closed. Reason: ${lastDisconnect.error?.message || 'Network Drop'} (Status: ${statusCode})`);
+            
             if (shouldReconnect) {
-                console.log('🔄 Reconnecting to WhatsApp in 5 seconds...');
+                console.log('🔄 Attempting to re-establish bridge in 5 seconds...');
                 setTimeout(connectToWhatsApp, 5000);
             }
         } else if (connection === 'open') {
