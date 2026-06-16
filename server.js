@@ -26,19 +26,23 @@ async function connectToWhatsApp() {
     const sock = makeWASocket({
         logger: pino({ level: 'silent' }),
         auth: state,
-        browser: Browsers.macOS('Desktop'),
+        // ব্রাউজার ইমুলেশন: এটি হোয়াটসঅ্যাপকে বোঝাবে যে এটি একটি সাধারণ ব্রাউজার
+        browser: Browsers.macOS('Chrome'), 
         generateHighQualityLinkPreview: true
     });
 
     sock.ev.on('connection.update', (update) => {
         const { connection, qr, lastDisconnect } = update;
         if (qr) {
-            console.log("\n[!] QR কোড জেনারেট হয়েছে! লগ থেকে স্ক্যান করুন:");
+            console.log("\n[!] কিউআর কোড জেনারেট হয়েছে! রেন্ডার লগ থেকে স্ক্যান করুন:");
             require('qrcode-terminal').generate(qr, { small: true });
         }
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) setTimeout(connectToWhatsApp, 5000);
+            if (shouldReconnect) {
+                console.log("কানেকশন বিচ্ছিন্ন, ৫ সেকেন্ড পর আবার চেষ্টা করছি...");
+                setTimeout(connectToWhatsApp, 5000);
+            }
         } else if (connection === 'open') {
             console.log("✅ হোয়াটসঅ্যাপ কানেক্টেড!");
         }
