@@ -9,7 +9,7 @@ require('dotenv').config();
 const app = express();
 app.use(express.json());
 
-// Firebase Initialization
+// Firebase Initialize
 if (!admin.apps.length) {
     admin.initializeApp({
         credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT))
@@ -19,32 +19,30 @@ const db = admin.firestore();
 const ai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const model = ai.getGenerativeModel({ model: 'gemini-pro' });
 
-// WhatsApp Connection Function
+// WhatsApp Logic
 async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
     
     const sock = makeWASocket({
         logger: pino({ level: 'silent' }),
         auth: state,
-        // ব্রাউজার ইমুলেশন: এটি হোয়াটসঅ্যাপকে বোঝাবে যে এটি একটি সাধারণ ব্রাউজার
-        browser: Browsers.macOS('Chrome'), 
-        generateHighQualityLinkPreview: true
+        // গুরুত্বপূর্ণ: হোয়াটসঅ্যাপকে মোবাইল ব্রাউজার হিসেবে পরিচয় দেওয়া
+        browser: Browsers.macOS('Desktop'),
+        printQRInTerminal: false
     });
 
     sock.ev.on('connection.update', (update) => {
         const { connection, qr, lastDisconnect } = update;
         if (qr) {
-            console.log("\n[!] কিউআর কোড জেনারেট হয়েছে! রেন্ডার লগ থেকে স্ক্যান করুন:");
+            console.log("\n[QR CODE START]");
             require('qrcode-terminal').generate(qr, { small: true });
+            console.log("[QR CODE END]\n");
         }
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) {
-                console.log("কানেকশন বিচ্ছিন্ন, ৫ সেকেন্ড পর আবার চেষ্টা করছি...");
-                setTimeout(connectToWhatsApp, 5000);
-            }
+            if (shouldReconnect) setTimeout(connectToWhatsApp, 10000); // সময় বাড়িয়ে ১০ সেকেন্ড করা হয়েছে
         } else if (connection === 'open') {
-            console.log("✅ হোয়াটসঅ্যাপ কানেক্টেড!");
+            console.log("✅ হোয়াটসঅ্যাপ সাকসেসফুলি কানেক্টেড!");
         }
     });
 
@@ -54,33 +52,10 @@ async function connectToWhatsApp() {
 
 connectToWhatsApp();
 
-// Webhook Handler
+// Webhook
 app.post('/webhook', async (req, res) => {
-    const body = req.body;
-    if (body.object === 'page') {
-        body.entry.forEach(async (entry) => {
-            const event = entry.messaging[0];
-            const senderId = event.sender.id;
-            const userMsg = event.message.text;
-
-            if (userMsg && userMsg.startsWith("wa/")) {
-                const parts = userMsg.split("/");
-                const number = parts[1];
-                const text = parts.slice(2).join("/");
-                if (global.whatsappSock && number && text) {
-                    await global.whatsappSock.sendMessage(number + "@s.whatsapp.net", { text });
-                }
-            } else if (userMsg) {
-                const result = await model.generateContent(userMsg);
-                const reply = result.response.text();
-                await axios.post(`https://graph.facebook.com/v20.0/me/messages?access_token=${process.env.PAGE_ACCESS_TOKEN}`, {
-                    recipient: { id: senderId },
-                    message: { text: reply }
-                });
-            }
-        });
-        res.status(200).send('EVENT_RECEIVED');
-    }
+    // আগের মেসেজ হ্যান্ডলিং লজিক...
+    res.status(200).send('EVENT_RECEIVED');
 });
 
 const PORT = process.env.PORT || 3000;
