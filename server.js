@@ -7,7 +7,7 @@ app.use(express.json());
 let pendingImages = {}; 
 
 app.get("/", (req, res) => {
-  res.send("বট সার্ভার সচল আছে! (Serper Live Search & Flash Fallback System Active)");
+  res.send("বট সার্ভার সচল আছে! (Serper Ultra-Search & Flash Fallback System Active)");
 });
 
 // ফেসবুক মেসেঞ্জার ভেরিফিকেশন
@@ -22,24 +22,23 @@ app.get("/webhook", (req, res) => {
   }
 });
 
-// --- [Serper.dev লাইভ গুগল সার্চ ফাংশন] ---
+// --- [Serper.dev লাইভ গুগল সার্চ ফাংশন - অপ্টিমাইজড] ---
 async function searchGoogleLive(query) {
-  // রেন্ডার ড্যাশবোর্ড থেকে এপিআই কি চেক করা হচ্ছে
   if (!process.env.SERPER_API_KEY) {
-    console.log("[Search] SERPER_API_KEY missing in Environment Variables. Skipping search.");
+    console.log("[Search] SERPER_API_KEY missing. Skipping search.");
     return null;
   }
 
   try {
-    console.log(`[Search] Fetching live results for: ${query}`);
+    console.log(`[Search] Fetching high-density live results for: ${query}`);
     const response = await fetch("https://google.serper.dev/search", {
       method: "POST",
       headers: {
         "X-API-KEY": process.env.SERPER_API_KEY,
         "Content-Type": "application/json"
       },
-      // gl: "bd" (বাংলাদেশ) এবং hl: "bn" (বাংলা) দিয়ে লোকাল রেজাল্ট নিখুঁত করা হয়েছে
-      body: JSON.stringify({ q: query, gl: "bd", hl: "bn" }) 
+      // num: 8 দিয়ে সার্চ রেজাল্ট বাড়ানো হয়েছে এবং hl বাদ দিয়ে গ্লোবাল ডেটা এক্সেস দেওয়া হয়েছে
+      body: JSON.stringify({ q: query, gl: "bd", num: 8 }) 
     });
 
     if (!response.ok) {
@@ -50,9 +49,9 @@ async function searchGoogleLive(query) {
     const data = await response.json();
     let searchResults = "";
     
-    // সেরা ৪টি সার্চ রেজাল্টের টাইটেল এবং সারসংক্ষেপ (Snippet) একসাথে জোড়া হচ্ছে
+    // টপ ৭টি রেজাল্ট একসাথে জোড়া হচ্ছে যাতে জেমিনি প্রচুর লাইভ ডেটা পায়
     if (data.organic && data.organic.length > 0) {
-      data.organic.slice(0, 4).forEach((item, index) => {
+      data.organic.slice(0, 7).forEach((item, index) => {
         searchResults += `${index + 1}. ${item.title}: ${item.snippet}\n`;
       });
       return searchResults;
@@ -67,14 +66,14 @@ async function searchGoogleLive(query) {
 // এপিআই কল করার হেল্পার ফাংশন
 async function callGemini(modelId, prompt, imageUrl, liveSearchContext) {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 18000); // ১৮ সেকেন্ড টাইমআউট
+  const timeoutId = setTimeout(() => controller.abort(), 18000); 
 
   try {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${process.env.GEMINI_API_KEY}`;
     
     let parts = [];
     
-    // ফেসবুকের ছবি প্রসেস এবং ডাউনলোড লজিক
+    // ফেসবুকের ছবি প্রসেস লজিক
     if (imageUrl) {
       try {
         const imgResponse = await fetch(imageUrl);
@@ -86,7 +85,6 @@ async function callGemini(modelId, prompt, imageUrl, liveSearchContext) {
           parts.push({
             inlineData: { mimeType: contentType, data: base64Data }
           });
-          console.log(`[Success] Image processed for ${modelId}`);
         }
       } catch (imgErr) {
         console.error("[Error] Image conversion failed:", imgErr.message);
@@ -98,10 +96,10 @@ async function callGemini(modelId, prompt, imageUrl, liveSearchContext) {
       year: 'numeric', month: 'long', day: 'numeric', weekday: 'long'
     });
     
-    // প্রম্পট ইঞ্জিনিয়ারিং: লাইভ সার্চের ডেটা প্রম্পটে সুন্দরভাবে ইনজেক্ট করা হচ্ছে
+    // প্রম্পট ইঞ্জিনিয়ারিং
     let systemNotice = `[সিস্টেম নোটিশ: আজকের তারিখ ও বার হলো ${today}।`;
     if (liveSearchContext) {
-      systemNotice += ` ইন্টারনেট থেকে পাওয়া লাইভ সার্চ রেজাল্ট নিচে দেওয়া হলো, এটার ওপর ভিত্তি করে একদম লেটেস্ট ও সঠিক উত্তর দাও।\n\nলাইভ তথ্য:\n${liveSearchContext}`;
+      systemNotice += ` ইন্টারনেট থেকে সংগৃহীত লাইভ তথ্য নিচে দেওয়া হলো। এখান থেকে মূল ডেটা (যেমন সময়, দলের নাম, স্কোর) ফিল্টার করে ব্যবহারকারীকে বাংলায় একদম নিখুঁত ও গোছানো উত্তর দাও।\n\nলাইভ তথ্য:\n${liveSearchContext}`;
     }
     systemNotice += `]`;
 
@@ -131,8 +129,7 @@ async function getGeminiResponse(prompt, imageUrl) {
   let liveSearchContext = null;
   const lowerPrompt = prompt.toLowerCase();
   
-  // ফিল্টারিং: শুধুমাত্র দরকারি বা সাম্প্রতিক তথ্যের প্রশ্নের জন্যই গুগল সার্চ রান হবে
-  if (imageUrl == null && (lowerPrompt.includes("খবর") || lowerPrompt.includes("আজকে") || lowerPrompt.includes("তারিখ") || lowerPrompt.includes("স্কোর") || lowerPrompt.includes("weather") || lowerPrompt.includes("আবহাওয়া") || lowerPrompt.includes("কে জিতেছে") || lowerPrompt.includes("কত") || lowerPrompt.includes("বর্তমান"))) {
+  if (imageUrl == null && (lowerPrompt.includes("খবর") || lowerPrompt.includes("আজকে") || lowerPrompt.includes("তারিখ") || lowerPrompt.includes("স্কোর") || lowerPrompt.includes("weather") || lowerPrompt.includes("আবহাওয়া") || lowerPrompt.includes("কে জিতেছে") || lowerPrompt.includes("কত") || lowerPrompt.includes("বর্তমান") || lowerPrompt.includes("খেলা"))) {
     liveSearchContext = await searchGoogleLive(prompt);
   }
 
@@ -156,7 +153,6 @@ app.post("/webhook", async (req, res) => {
         const event = entry.messaging[0];
         const senderId = event.sender.id;
 
-        // ছবি সনাক্তকরণ (ছবি পেলে বট চুপ থাকবে)
         if (event.message?.attachments) {
           const attachment = event.message.attachments[0];
           if (attachment.type === "image") {
@@ -165,13 +161,12 @@ app.post("/webhook", async (req, res) => {
           }
         }
 
-        // টেক্সট মেসেজ আসলে রিপ্লাই দেওয়া
         if (event.message?.text) {
           const userMessage = event.message.text;
           const savedImage = pendingImages[senderId] || null;
           
           const aiReply = await getGeminiResponse(userMessage, savedImage);
-          pendingImages[senderId] = null; // কাজ শেষে ইমেজ মেমোরি খালি করা
+          pendingImages[senderId] = null; 
 
           const fbUrl = `https://graph.facebook.com/v21.0/me/messages?access_token=${process.env.PAGE_ACCESS_TOKEN}`;
           await fetch(fbUrl, {
