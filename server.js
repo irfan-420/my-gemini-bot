@@ -188,9 +188,9 @@ async function getGeminiResponse(senderId, prompt, imageUrl) {
     history.push({ role: "user", parts: [{ text: prompt }] });
     history.push({ role: "model", parts: [{ text: reply }] });
 
-    // টোকেন লিমিট বাঁচাতে এবং মেমরি ক্লিন রাখতে শেষ ১২টি মেসেজ (৬ জোড়া কথোপকথন) রাখবে
-    if (history.length > 12) {
-      history = history.slice(-12);
+    // টোকেন লিমিট বাঁচাতে এবং মেমরি ক্লিন রাখতে শেষ ১০০টি মেসেজ (৫০ জোড়া কথোপকথন) রাখবে
+    if (history.length > 100) {
+      history = history.slice(-100);
     }
 
     await docRef.set({ history }, { merge: true });
