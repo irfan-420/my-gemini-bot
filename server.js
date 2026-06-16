@@ -1,16 +1,32 @@
 const express = require("express");
+const admin = require("firebase-admin");
 const app = express();
 
 app.use(express.json());
 
-// ছবি মনে রাখার জন্য সাময়িক মেমোরি
+// --- [ফায়ারবেস ফায়ারস্টোর কানেকশন সেটআপ] ---
+try {
+  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount)
+    });
+    console.log("[Firebase] Persistent Memory Connected Successfully!");
+  } else {
+    console.log("[Firebase] Warning: FIREBASE_SERVICE_ACCOUNT env variable is missing.");
+  }
+} catch (err) {
+  console.error("[Firebase Init Error]:", err.message);
+}
+
+const db = admin.firestore();
 let pendingImages = {}; 
 
 app.get("/", (req, res) => {
-  res.send("বট সার্ভার সচল আছে! (Serper Ultra-Search System Active - Zero Quota Error)");
+  res.send("বট সার্ভার সচল আছে! (Serper Search Engine & Firebase Persistent Memory Active)");
 });
 
-// ফেসবুক মেসেঞ্জার ভেরিফিকেশন
+// ফেসবুক মেসেঞ্জার ওয়েব হুক ভেরিফিকেশন (GET)
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
@@ -22,7 +38,7 @@ app.get("/webhook", (req, res) => {
   }
 });
 
-// --- [Serper.dev লাইভ গুগল সার্চ ফাংশন - ১০০% ফ্রি ও কার্যকর] ---
+// --- [Serper.dev লাইভ গুগল সার্চ ফাংশন] ---
 async function searchGoogleLive(query) {
   if (!process.env.SERPER_API_KEY) {
     console.log("[Search] SERPER_API_KEY missing. Skipping live search.");
@@ -30,15 +46,21 @@ async function searchGoogleLive(query) {
   }
 
   try {
-    console.log(`[Search] Fetching high-density live results for: ${query}`);
+    console.log(`[Search] Fetching live results for: ${query}`);
+    
+    let finalQuery = query;
+    // খেলা সম্পর্কিত সার্চগুলোকে আরও নিখুঁত করার লজিক
+    if (query.includes("খেলা") || query.includes("ম্যাচ") || query.includes("ওয়ার্ল্ড কাপ")) {
+      finalQuery = `${query} matches schedule today football live score`;
+    }
+
     const response = await fetch("https://google.serper.dev/search", {
       method: "POST",
       headers: {
         "X-API-KEY": process.env.SERPER_API_KEY,
         "Content-Type": "application/json"
       },
-      // এখানে hl বাদ দেওয়া হয়েছে যাতে গ্লোবাল ইংরেজি ও বাংলা সব সাইটের নিখুঁত শিডিউল ডেটা পাওয়া যায়
-      body: JSON.stringify({ q: query, gl: "bd", num: 8 }) 
+      body: JSON.stringify({ q: finalQuery, num: 10 }) // ১০টি ওয়েবসাইট স্ক্যান করবে
     });
 
     if (!response.ok) return null;
@@ -46,31 +68,35 @@ async function searchGoogleLive(query) {
     const data = await response.json();
     let searchResults = "";
     
-    // সেরা ৭টি ওয়েবসাইটের তথ্য একসাথে জোড়া হচ্ছে যাতে জেমিনির তথ্যের অভাব না হয়
+    // গুগলের ডিরেক্ট অ্যান্সার বক্স থাকলে সেটা আগে নেবে
+    if (data.answerBox) {
+      searchResults += `Answer Box: ${data.answerBox.title || ''} - ${data.answerBox.answer || data.answerBox.snippet || ''}\n`;
+    }
+
     if (data.organic && data.organic.length > 0) {
-      data.organic.slice(0, 7).forEach((item, index) => {
+      data.organic.slice(0, 8).forEach((item, index) => {
         searchResults += `${index + 1}. ${item.title}: ${item.snippet}\n`;
       });
       return searchResults;
     }
     return null;
   } catch (error) {
-    console.error("[Search Error] Failed:", error.message);
+    console.error("[Search Error]:", error.message);
     return null;
   }
 }
 
-// এপিআই কল করার হেল্পার ফাংশন
-async function callGemini(modelId, prompt, imageUrl, liveSearchContext) {
+// জেমিনি এপিআই কল করার কোর ফাংশন
+async function callGemini(modelId, history, prompt, imageUrl, liveSearchContext) {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 18000); 
+  const timeoutId = setTimeout(() => controller.abort(), 18000); // ১৮ সেকেন্ড টাইমআউট
 
   try {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${process.env.GEMINI_API_KEY}`;
     
-    let parts = [];
+    let currentParts = [];
     
-    // ছবি প্রসেস লজিক
+    // ইমেজ এটাচমেন্ট প্রসেসিং লজিক
     if (imageUrl) {
       try {
         const imgResponse = await fetch(imageUrl);
@@ -78,32 +104,35 @@ async function callGemini(modelId, prompt, imageUrl, liveSearchContext) {
           const arrayBuffer = await imgResponse.arrayBuffer();
           const base64Data = Buffer.from(arrayBuffer).toString("base64");
           const contentType = imgResponse.headers.get("content-type") || "image/jpeg";
-          parts.push({ inlineData: { mimeType: contentType, data: base64Data } });
+          currentParts.push({ inlineData: { mimeType: contentType, data: base64Data } });
         }
       } catch (err) {
         console.error("Image error:", err.message);
       }
     }
     
-    // সার্ভার থেকে আজকের সঠিক তারিখ বের করা
+    currentParts.push({ text: prompt });
+    // আগের চ্যাট হিস্টোরির সাথে বর্তমান মেসেজ মার্জ করা হচ্ছে
+    let contentsPayload = [...history, { role: "user", parts: currentParts }];
+    
+    // সার্ভারের বর্তমান তারিখ ও বার বের করা
     const today = new Date().toLocaleDateString('bn-BD', {
       year: 'numeric', month: 'long', day: 'numeric', weekday: 'long'
     });
     
-    // প্রম্পট ইঞ্জিনিয়ারিং: সংগৃহীত লাইভ তথ্য জেমিনিকে বাংলায় রূপান্তর করতে বলা হচ্ছে
-    let systemNotice = `[সিস্টেম নোটিশ: আজকের তারিখ ও বার হলো ${today}।`;
+    // সিস্টেম ইনস্ট্রাকশন সেটআপ (সার্চ রেজাল্ট প্রম্পট আলাদা রাখার ট্রিক)
+    let systemNotice = `তুমি একটি ফেসবুক মেসেঞ্জার এআই অ্যাসিস্ট্যান্ট। আজকের সঠিক তারিখ ও বার হলো ${today}।`;
     if (liveSearchContext) {
-      systemNotice += ` ইন্টারনেট থেকে সংগৃহীত লাইভ তথ্য নিচে দেওয়া হলো। এখান থেকে মূল ডেটা (যেমন সময়, ম্যাচের তালিকা, খেলার স্কোর) ফিল্টার করে ব্যবহারকারীকে বাংলায় একদম নিখুঁত, স্পষ্ট ও গোছানো উত্তর দাও।\n\nলাইভ তথ্য:\n${liveSearchContext}`;
+      systemNotice += ` ইন্টারনেট থেকে সংগৃহীত রিয়েল-টাইম লাইভ তথ্য নিচে দেওয়া হলো। এখান থেকে আজকের নির্দিষ্ট ম্যাচের তালিকা, সময়সূচী ও স্কোর ফিল্টার করে ব্যবহারকারীকে বাংলায় একদম স্পষ্ট ও নির্ভুল তালিকা আকারে উত্তর দাও। কোনো তথ্য না থাকলে মনগড়া কিছু বলবে না।\n\nলাইভ তথ্য:\n${liveSearchContext}`;
     }
-    systemNotice += `]`;
-
-    const fullPrompt = `${systemNotice}\n\nব্যবহারকারীর প্রশ্ন: ${prompt}`;
-    parts.push({ text: fullPrompt });
 
     const response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ contents: [{ parts: parts }] }), // ৪২৯ এরর এড়াতে গুগলের নিজস্ব টুলস সম্পূর্ণ বাদ
+      body: JSON.stringify({ 
+        contents: contentsPayload,
+        systemInstruction: { parts: [{ text: systemNotice }] }
+      }),
       signal: controller.signal
     });
 
@@ -118,28 +147,62 @@ async function callGemini(modelId, prompt, imageUrl, liveSearchContext) {
   }
 }
 
-// ৩.৫ এবং ৩.১ এর ফলব্যাক ও চেইনিং মেকানিজম
-async function getGeminiResponse(prompt, imageUrl) {
+// মূল রেসপন্স হ্যান্ডলার (ফায়ারবেস রিড এবং রাইট প্রসেসসহ)
+async function getGeminiResponse(senderId, prompt, imageUrl) {
+  let history = [];
+  const docRef = db.collection("messenger_chats").doc(senderId);
+
+  // ১. ফায়ারবেস থেকে ইউজারের আগের চ্যাট হিস্টোরি রিড করা
+  try {
+    const doc = await docRef.get();
+    if (doc.exists) {
+      history = doc.data().history || [];
+    }
+  } catch (dbErr) {
+    console.error("[Firebase Read Error]:", dbErr.message);
+  }
+  
   let liveSearchContext = null;
   const lowerPrompt = prompt.toLowerCase();
   
-  // ফিল্টারিং: শুধুমাত্র দরকারি বা সাম্প্রতিক তথ্যের প্রশ্নের জন্যই লাইভ সার্চ রান হবে
-  if (imageUrl == null && (lowerPrompt.includes("খবর") || lowerPrompt.includes("আজকে") || lowerPrompt.includes("তারিখ") || lowerPrompt.includes("স্কোর") || lowerPrompt.includes("weather") || lowerPrompt.includes("আবহাওয়া") || lowerPrompt.includes("কে জিতেছে") || lowerPrompt.includes("কত") || lowerPrompt.includes("বর্তমান") || lowerPrompt.includes("খেলা"))) {
+  // নির্দিষ্ট কিওয়ার্ড ম্যাচ করলে লাইভ সার্চ রান হবে
+  if (imageUrl == null && (lowerPrompt.includes("খবর") || lowerPrompt.includes("আজকে") || lowerPrompt.includes("তারিখ") || lowerPrompt.includes("স্কোর") || lowerPrompt.includes("weather") || lowerPrompt.includes("আবহাওয়া") || lowerPrompt.includes("কে জিতেছে") || lowerPrompt.includes("কত") || lowerPrompt.includes("বর্তমান") || lowerPrompt.includes("খেলা") || lowerPrompt.includes("ম্যাচ"))) {
     liveSearchContext = await searchGoogleLive(prompt);
   }
 
-  console.log(`[Process] Requesting gemini-3.5-flash...`);
-  let reply = await callGemini("gemini-3.5-flash", prompt, imageUrl, liveSearchContext);
-  if (reply) return reply;
+  console.log(`[Process] Requesting Primary Model (gemini-3.5-flash)...`);
+  let reply = await callGemini("gemini-3.5-flash", history, prompt, imageUrl, liveSearchContext);
+  
+  // ব্যাকআপ ফলব্যাক মডেল চেইনিং
+  if (!reply) {
+    console.log(`[Fallback] Switching to Backup Model (gemini-3.1-flash-lite)...`);
+    reply = await callGemini("gemini-3.1-flash-lite", history, prompt, imageUrl, liveSearchContext);
+  }
 
-  console.log(`[Fallback] gemini-3.5-flash failed. Trying gemini-3.1-flash-lite...`);
-  reply = await callGemini("gemini-3.1-flash-lite", prompt, imageUrl, liveSearchContext);
-  if (reply) return reply;
+  if (!reply) {
+    return "দুঃখিত ভাই, এই মুহূর্তে সার্ভারে অতিরিক্ত চাপ রয়েছে। দয়া করে একটু পর আবার চেষ্টা করুন।";
+  }
 
-  return "দুঃখিত ভাই, সার্ভারে অতিরিক্ত চাপের কারণে উত্তর দিতে পারছি না। দয়া করে একটু পর আবার চেষ্টা করুন।";
+  // ২. নতুন চ্যাট হিস্টোরি আপডেট করে ফায়ারবেসে রাইট করা
+  try {
+    history.push({ role: "user", parts: [{ text: prompt }] });
+    history.push({ role: "model", parts: [{ text: reply }] });
+
+    // টোকেন লিমিট বাঁচাতে এবং মেমরি ক্লিন রাখতে শেষ ১২টি মেসেজ (৬ জোড়া কথোপকথন) রাখবে
+    if (history.length > 12) {
+      history = history.slice(-12);
+    }
+
+    await docRef.set({ history }, { merge: true });
+    console.log(`[Firebase] Chat history saved for user: ${senderId}`);
+  } catch (dbErr) {
+    console.error("[Firebase Write Error]:", dbErr.message);
+  }
+
+  return reply;
 }
 
-// ফেসবুক মেসেজ হ্যান্ডলার
+// ফেসবুক মেসেজ রিসিভ এবং সেন্ড হ্যান্ডলার (POST)
 app.post("/webhook", async (req, res) => {
   const body = req.body;
   if (body.object === "page") {
@@ -148,6 +211,7 @@ app.post("/webhook", async (req, res) => {
         const event = entry.messaging[0];
         const senderId = event.sender.id;
 
+        // ইমেজ অ্যাটাচমেন্ট হ্যান্ডলার
         if (event.message?.attachments) {
           const attachment = event.message.attachments[0];
           if (attachment.type === "image") {
@@ -156,13 +220,16 @@ app.post("/webhook", async (req, res) => {
           }
         }
 
+        // টেক্সট মেসেজ হ্যান্ডলার
         if (event.message?.text) {
           const userMessage = event.message.text;
           const savedImage = pendingImages[senderId] || null;
           
-          const aiReply = await getGeminiResponse(userMessage, savedImage);
-          pendingImages[senderId] = null; 
+          // রেসপন্স জেনারেট করা (senderId সহ)
+          const aiReply = await getGeminiResponse(senderId, userMessage, savedImage);
+          pendingImages[senderId] = null; // ইমেজ ক্যাশ ক্লিয়ার
 
+          // ফেসবুক গ্রাফ এপিআই-এর মাধ্যমে রিপ্লাই পাঠানো
           const fbUrl = `https://graph.facebook.com/v21.0/me/messages?access_token=${process.env.PAGE_ACCESS_TOKEN}`;
           await fetch(fbUrl, {
             method: "POST",
@@ -182,4 +249,4 @@ app.post("/webhook", async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Bot running on port ${PORT}`));
+app.listen(PORT, () => console.log(`SuperNinja Persistent AI Bot running on port ${PORT}`));
