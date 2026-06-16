@@ -2,7 +2,7 @@ const express = require('express');
 const axios = require('axios');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const admin = require('firebase-admin');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, BufferJSON, initAuthCreds, DisconnectReason } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
 const pino = require('pino');
 require('dotenv').config();
@@ -33,12 +33,62 @@ const ai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const model = ai.getGenerativeModel({ model: 'gemini-pro' });
 
 // ------------------------------------------------------------------
-// ৩. হোয়াটসঅ্যাপ桥 (WhatsApp Bridge) ইনিশিয়েলাইজেশন
+// ৩. ফায়ারবেস হোয়াটসঅ্যাপ সেশন হ্যান্ডলার (Firebase Auth State)
+// ------------------------------------------------------------------
+async function useFirebaseAuthState() {
+    const collectionRef = db.collection('whatsapp_session');
+    
+    let creds;
+    const credsDoc = await collectionRef.doc('creds').get();
+    if (credsDoc.exists) {
+        creds = JSON.parse(credsDoc.data().data, BufferJSON.reviver);
+    } else {
+        creds = initAuthCreds();
+    }
+
+    return {
+        state: {
+            creds,
+            keys: {
+                get: async (type, ids) => {
+                    const data = {};
+                    for (const id of ids) {
+                        const doc = await collectionRef.doc(`${type}-${id}`).get();
+                        if (doc.exists) {
+                            data[id] = JSON.parse(doc.data().data, BufferJSON.reviver);
+                        }
+                    }
+                    return data;
+                },
+                set: async (data) => {
+                    for (const type in data) {
+                        for (const id in data[type]) {
+                            const value = data[type][id];
+                            const docRef = collectionRef.doc(`${type}-${id}`);
+                            if (value) {
+                                await docRef.set({ data: JSON.stringify(value, BufferJSON.replacer) });
+                            } else {
+                                await docRef.delete();
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        saveCreds: async () => {
+            await collectionRef.doc('creds').set({ data: JSON.stringify(creds, BufferJSON.replacer) });
+        }
+    };
+}
+
+// ------------------------------------------------------------------
+// ৪. হোয়াটসঅ্যাপ ব্রিজ (WhatsApp Bridge) ইনিশিয়েলাইজেশন
 // ------------------------------------------------------------------
 global.whatsappSock = null;
 
 async function connectToWhatsApp() {
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+    console.log("⏳ Fetching WhatsApp Auth State from Firebase...");
+    const { state, saveCreds } = await useFirebaseAuthState();
     
     const sock = makeWASocket({
         logger: pino({ level: 'silent' }),
@@ -60,10 +110,10 @@ async function connectToWhatsApp() {
             const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
             console.log('❌ WhatsApp connection closed. Reconnecting:', shouldReconnect);
             if (shouldReconnect) {
-                connectToWhatsApp();
+                setTimeout(connectToWhatsApp, 5000); // কন্টিনিউয়াস লুপ এড়াতে ৫ সেকেন্ড ডিলে দেওয়া হয়েছে
             }
         } else if (connection === 'open') {
-            console.log('✅ WhatsApp User-Bot successfully connected!');
+            console.log('✅ WhatsApp User-Bot successfully connected and saved to Firebase!');
         }
     });
 
@@ -71,10 +121,11 @@ async function connectToWhatsApp() {
     global.whatsappSock = sock;
 }
 
+// হোয়াটসঅ্যাপ কানেকশন স্টার্ট করা
 connectToWhatsApp();
 
 // ------------------------------------------------------------------
-// ৪. ফেসবুক মেসেঞ্জার ওয়েবহুক (Webhook Verification)
+// ৫. ফেসবুক মেসেঞ্জার ওয়েবহুক (Webhook Verification)
 // ------------------------------------------------------------------
 app.get('/webhook', (req, res) => {
     const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
@@ -93,7 +144,7 @@ app.get('/webhook', (req, res) => {
 });
 
 // ------------------------------------------------------------------
-// ৫. ফেসবুক থেকে মেসেজ রিসিভ এবং প্রসেস করা
+// ৬. ফেসবুক থেকে মেসেজ রিসিভ এবং প্রসেস করা
 // ------------------------------------------------------------------
 app.post('/webhook', async (req, res) => {
     const body = req.body;
@@ -176,7 +227,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 // ------------------------------------------------------------------
-// ৬. ফেসবুকে মেসেজ ব্যাক পাঠানোর ফাংশন
+// ৭. ফেসবুকে মেসেজ ব্যাক পাঠানোর ফাংশন
 // ------------------------------------------------------------------
 async function sendToFacebook(senderId, text) {
     const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
