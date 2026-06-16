@@ -7,7 +7,7 @@ app.use(express.json());
 let pendingImages = {}; 
 
 app.get("/", (req, res) => {
-  res.send("বট সার্ভার সচল আছে! (3.5 + 3.1 Flash Lite Fallback Enabled)");
+  res.send("বট সার্ভার সচল আছে! (3.5 + 3.1 Flash Lite + Google Live Search Enabled)");
 });
 
 // ফেসবুক মেসেঞ্জার ভেরিফিকেশন
@@ -22,10 +22,10 @@ app.get("/webhook", (req, res) => {
   }
 });
 
-// এপিআই কল করার হেল্পার ফাংশন (টাইমআউট এবং ফলব্যাক সহ)
+// এপিআই কল করার হেল্পার ফাংশন (টাইমআউট, ফলব্যাক এবং গুগল সার্চসহ)
 async function callGemini(modelId, prompt, imageUrl) {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 12000); // ১২ সেকেন্ড টাইমআউট
+  const timeoutId = setTimeout(() => controller.abort(), 15000); // সার্চ করতে সময় লাগতে পারে তাই ১৫ সেকেন্ড টাইমআউট
 
   try {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${process.env.GEMINI_API_KEY}`;
@@ -39,7 +39,11 @@ async function callGemini(modelId, prompt, imageUrl) {
     const response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ contents: [{ parts: parts }] }),
+      body: JSON.stringify({ 
+        contents: [{ parts: parts }],
+        // এই লাইনটি বটকে গুগলে সার্চ করে একদম লেটেস্ট খবর বের করার ক্ষমতা দেবে
+        tools: [{ googleSearch: {} }] 
+      }),
       signal: controller.signal
     });
 
@@ -82,7 +86,7 @@ app.post("/webhook", async (req, res) => {
           const attachment = event.message.attachments[0];
           if (attachment.type === "image") {
             pendingImages[senderId] = attachment.payload.url;
-            return res.status(200).send("EVENT_RECEIVED"); // চুপ থাকবে
+            return res.status(200).send("EVENT_RECEIVED"); // ছবি পেলে বট চুপ থাকবে
           }
         }
 
@@ -91,6 +95,7 @@ app.post("/webhook", async (req, res) => {
           const userMessage = event.message.text;
           const savedImage = pendingImages[senderId] || null;
           
+          // জেমিনি থেকে রেসপন্স নেওয়া (সার্চ রেজাল্টসহ)
           const aiReply = await getGeminiResponse(userMessage, savedImage);
           
           // উত্তর দেওয়ার পর ইমেজ মেমোরি ক্লিয়ার
